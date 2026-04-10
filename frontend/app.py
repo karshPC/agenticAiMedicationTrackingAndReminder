@@ -167,6 +167,60 @@ if st.session_state.logged_in:
     meds = res.json()
 
     for med in meds:
+        edit_mode = st.checkbox("✏️ Edit", key=f"edit_{med['id']}")
+        
+        if edit_mode:
+
+            new_name = st.text_input("Name", value=med["name"], key=f"name_{med['id']}")
+            new_dosage = st.text_input("Dosage", value=med["dosage"], key=f"dose_{med['id']}")
+
+            new_count = st.number_input(
+                "Number of doses",
+                min_value=1,
+                max_value=5,
+                value=len(med.get("schedule", [])),
+                key=f"count_{med['id']}"
+            )
+
+            new_times = []
+
+            for i in range(int(new_count)):
+                default_time = med["schedule"][i]["time"] if i < len(med["schedule"]) else "09:00"
+
+                t = st.time_input(
+                    f"Time {i+1}",
+                    value=datetime.datetime.strptime(default_time, "%H:%M").time(),
+                    key=f"edit_time_{med['id']}_{i}"
+                )
+
+                new_times.append(t.strftime("%H:%M"))
+
+            if st.button("💾 Save Changes", key=f"save_{med['id']}"):
+
+                new_schedule = [
+                    {
+                        "time": t,
+                        "taken": False,
+                        "last_taken_date": ""
+                    }
+                    for t in new_times
+                ]
+
+                res = requests.put(
+                    f"{API_URL}/medications/update/{med['id']}",
+                    json={
+                        "name": new_name,
+                        "dosage": new_dosage,
+                        "schedule": new_schedule
+                    }
+                )
+
+                if res.status_code == 200:
+                    st.success("Updated successfully")
+                    st.rerun()
+                else:
+                    st.error("Update failed")
+
         st.markdown('<div class="card">', unsafe_allow_html=True)
 
         st.write(f"### 💊 {med['name']} ({med['dosage']})")

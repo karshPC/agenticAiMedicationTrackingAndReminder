@@ -1,6 +1,7 @@
 from typing import TypedDict, List
 from langgraph.graph import StateGraph
 from datetime import datetime
+from rapidfuzz import fuzz
 
 
 # ---------- STATE ---------- #
@@ -8,30 +9,44 @@ class AgentState(TypedDict):
     query: str
     medications: List[dict]
     response: str
+    user_id: str  # for memory
+
+
+# ---------- MEMORY STORE ---------- #
+memory_store = {}
 
 
 # ---------- INTENT DETECTION ---------- #
+from rapidfuzz import fuzz
+
+
+def fuzzy_match(query, keywords, threshold=70):
+    for word in keywords:
+        if fuzz.partial_ratio(query, word) >= threshold:
+            return True
+    return False
+
+
 def detect_intent(query):
 
     query = query.lower()
 
-    if any(word in query for word in ["adherence", "progress", "percentage"]):
+    if fuzzy_match(query, ["adherence", "progress", "percentage"]):
         return "adherence"
 
-    if any(word in query for word in ["miss", "pending", "left", "remaining"]):
+    if fuzzy_match(query, ["miss", "pending", "left", "remaining"]):
         return "pending"
 
-    if any(word in query for word in ["taken", "completed"]):
+    if fuzzy_match(query, ["taken", "completed"]):
         return "taken"
 
-    if any(word in query for word in ["highest", "best", "most"]):
+    if fuzzy_match(query, ["highest", "best", "most"]):
         return "best_med"
 
-    if any(word in query for word in ["all", "complete", "done"]):
+    if fuzzy_match(query, ["all", "complete", "done"]):
         return "completion"
 
     return "unknown"
-
 
 # ---------- CORE LOGIC ---------- #
 def process_agent(state: AgentState):
@@ -42,6 +57,15 @@ def process_agent(state: AgentState):
     meds = state["medications"]
     today = datetime.now().strftime("%Y-%m-%d")
 
+    # ---------- MEMORY INIT ---------- #
+    user_id = state.get("user_id", "default")
+
+    if user_id not in memory_store:
+        memory_store[user_id] = []
+
+    history = memory_store[user_id]
+
+    # ---------- DATA PROCESS ---------- #
     pending_map = {}
     taken_map = {}
 
@@ -66,13 +90,23 @@ def process_agent(state: AgentState):
             else:
                 pending_map[name] = pending_map.get(name, 0) + 1
 
+    # ---------- CONTEXT FOLLOW-UP ---------- #
+    if query in ["which one", "which", "what ones", "tell me"] and history:
+        last = history[-1]["response"]
+
+        if "Pending" in last:
+            state["response"] = last
+            return state
+
     # ---------- SPECIFIC MED ---------- #
     for med in meds:
         name = med.get("name", "")
-        if name.lower() in query:
+        if fuzz.partial_ratio(name.lower(), query) > 70:
             pending = pending_map.get(name, 0)
             taken = taken_map.get(name, 0)
             state["response"] = f"{name}: {taken} taken, {pending} pending"
+
+            history.append({"query": query, "response": state["response"]})
             return state
 
     # ---------- BEST MEDICINE ---------- #
@@ -104,6 +138,7 @@ def process_agent(state: AgentState):
         else:
             state["response"] = "No data available"
 
+        history.append({"query": query, "response": state["response"]})
         return state
 
     # ---------- ADHERENCE ---------- #
@@ -113,6 +148,8 @@ def process_agent(state: AgentState):
         else:
             percent = round((total_taken / total_doses) * 100, 2)
             state["response"] = f"📊 Adherence: {percent}% ({total_taken}/{total_doses})"
+
+        history.append({"query": query, "response": state["response"]})
         return state
 
     # ---------- PENDING ---------- #
@@ -124,6 +161,8 @@ def process_agent(state: AgentState):
             for name, count in pending_map.items():
                 msg += f"- {name} → {count}\n"
             state["response"] = msg
+
+        history.append({"query": query, "response": state["response"]})
         return state
 
     # ---------- TAKEN ---------- #
@@ -135,6 +174,8 @@ def process_agent(state: AgentState):
             for name, count in taken_map.items():
                 msg += f"- {name} → {count}\n"
             state["response"] = msg
+
+        history.append({"query": query, "response": state["response"]})
         return state
 
     # ---------- COMPLETION ---------- #
@@ -144,10 +185,14 @@ def process_agent(state: AgentState):
         else:
             remaining = total_doses - total_taken
             state["response"] = f"⚠️ {remaining} doses still pending"
+
+        history.append({"query": query, "response": state["response"]})
         return state
 
     # ---------- DEFAULT ---------- #
     state["response"] = "🤖 Ask about adherence, pending, taken, or best medicine"
+
+    history.append({"query": query, "response": state["response"]})
     return state
 
 

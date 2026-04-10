@@ -333,8 +333,66 @@ def get_medications(email: str):
 
 @app.put("/medications/update/{doc_id}")
 def update_medication(doc_id: str, data: dict = Body(...)):
-    db.collection("medications").document(doc_id).update(data)
-    return {"message": "Updated"}
+
+    doc_ref = db.collection("medications").document(doc_id)
+    doc = doc_ref.get()
+
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Medication not found")
+
+    old_data = doc.to_dict()
+
+    old_schedule = old_data.get("schedule", [])
+    new_schedule = data.get("schedule", [])
+
+    name = data.get("name", old_data.get("name"))
+    dosage = data.get("dosage", old_data.get("dosage"))
+
+    # ---------- DETECT FULL EDIT ---------- #
+    is_full_edit = (
+        "name" in data or
+        "dosage" in data or
+        len(new_schedule) != len(old_schedule)
+    )
+
+    # ---------- IF FULL EDIT → RESET CALENDAR ---------- #
+    if is_full_edit:
+
+        # DELETE OLD EVENTS
+        for dose in old_schedule:
+            event_id = dose.get("event_id")
+            if event_id:
+                try:
+                    delete_event(event_id)
+                except:
+                    pass
+
+        # CREATE NEW EVENTS
+        for dose in new_schedule:
+            try:
+                event_id = create_event(
+                    summary=f"Take {name}",
+                    description=f"Dosage: {dosage}",
+                    time_str=dose["time"]
+                )
+                dose["event_id"] = event_id
+            except:
+                pass
+
+    else:
+        # ---------- PARTIAL UPDATE (checkbox/snooze) ---------- #
+        # KEEP EXISTING EVENT IDs
+        for i in range(len(new_schedule)):
+            if i < len(old_schedule):
+                new_schedule[i]["event_id"] = old_schedule[i].get("event_id")
+
+    # ---------- SAVE ---------- #
+    data["name"] = name
+    data["dosage"] = dosage
+
+    doc_ref.update(data)
+
+    return {"message": "Updated safely"}
 
 
 @app.delete("/medications/delete/{doc_id}")
@@ -450,7 +508,8 @@ def chat(user_email: str, query: str):
     result = agent.invoke({
         "query": query,
         "medications": meds,
-        "response": ""
+        "response": "",
+        "user_id": user_email   # ✅ ADD THIS
     })
 
     return {"response": result["response"]}
