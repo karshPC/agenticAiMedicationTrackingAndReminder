@@ -3,3 +3,4 @@ credentials.json
 backend/serviceAccount.json
 backend/calendar_credentials.json
 __pycache__/
+.DS_Store
