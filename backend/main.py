@@ -19,6 +19,35 @@ from calendar_utils import create_event, delete_event
 from ocr import extract_text
 from ai_parser import extract_medicines
 from langgraph_agent import agent
+from llm_chat import llm_chat_response
+
+from llm_chat import llm_chat_response
+from ai_parser import parse_chat_query
+
+
+import json
+def clean_medicines(meds):
+
+    cleaned = []
+
+    for med in meds:
+        name = med.get("name", "").strip()
+
+        # ❌ remove garbage entries
+        if len(name) < 3:
+            continue
+        if "hospital" in name.lower():
+            continue
+        if "www" in name.lower():
+            continue
+
+        cleaned.append({
+            "name": name,
+            "dosage": med.get("dosage", "Not specified")
+        })
+
+    return cleaned[:5]
+
 
 load_dotenv()
 
@@ -483,7 +512,41 @@ async def ocr_upload(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
 
     text = extract_text(file_path)
-    meds = extract_medicines(text)
+
+    print("\n===== OCR TEXT =====")
+    print(text)
+
+    # ---------- TRY LLM FIRST ---------- #
+    try:
+        from llm_parser import extract_medicines_llm
+        import json
+
+        meds_raw = extract_medicines_llm(text)
+
+        # 🔥 CLEAN MARKDOWN
+        meds_raw = meds_raw.strip()
+        if meds_raw.startswith("```"):
+            meds_raw = meds_raw.replace("```json", "").replace("```", "").strip()
+
+        meds = clean_medicines(json.loads(meds_raw))
+
+        # 🔥 SAFETY LIMIT
+        if not isinstance(meds, list):
+            raise Exception("Invalid format")
+
+        meds = meds[:5]
+
+        print("\n===== LLM PARSED =====")
+        print(meds)
+
+    # ---------- FALLBACK ---------- #
+    except Exception as e:
+        print("❌ LLM FAILED:", e)
+
+        meds = extract_medicines(text)
+
+        print("\n===== FALLBACK PARSER =====")
+        print(meds)
 
     os.remove(file_path)
 
@@ -493,6 +556,9 @@ async def ocr_upload(file: UploadFile = File(...)):
     }
 
 # ---------------- AI CHAT ---------------- #
+
+from llm_chat import llm_chat_response
+import json
 
 @app.post("/chat")
 def chat(user_email: str, query: str):
@@ -505,11 +571,141 @@ def chat(user_email: str, query: str):
         data["id"] = doc.id
         meds.append(data)
 
-    result = agent.invoke({
-        "query": query,
-        "medications": meds,
-        "response": "",
-        "user_id": user_email   # ✅ ADD THIS
-    })
+    try:
+        # ---------- STEP 1: TRY LLM ----------
+        raw = llm_chat_response(query, meds)
 
-    return {"response": result["response"]}
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.replace("```json", "").replace("```", "").strip()
+
+        data = json.loads(raw)
+
+    except Exception as e:
+        print("❌ LLM FAILED → FALLBACK:", e)
+
+        # ---------- STEP 2: LOCAL PARSER ----------
+        data = parse_chat_query(query)
+
+        # ---------- STEP 3: IF STILL UNKNOWN → AGENT ----------
+        if data.get("action") == "unknown":
+
+            agent_response = agent.invoke({
+                "query": query,
+                "medications": meds
+            })
+
+            return {
+                "response": agent_response.get(
+                    "response",
+                    "🤖 Could not understand your request"
+                )
+            }
+
+        # ---------- ADD MEDICINE ---------- #
+        if data.get("action") == "add":
+
+            times = data.get("times", [])
+
+            # ❗ IF NO TIMES → ASK USER
+            if not times:
+                return {
+                    "response": f"⚠️ You didn’t specify time for {data.get('name','medicine')}.\nSet default (09:00)? Reply YES or NO.",
+                    "pending": data   # 👈 VERY IMPORTANT
+                }
+
+            # ✅ NORMAL ADD
+            new_med = {
+                "name": data.get("name", "Unknown"),
+                "dosage": data.get("dosage", "Not specified"),
+                "user_email": user_email.lower(),
+                "schedule": [{"time": t, "taken": False} for t in times]
+            }
+
+            db.collection("medications").document().set(new_med)
+
+            return {"response": f"✅ Added {new_med['name']}"}
+
+        # ---------- EDIT MED ---------- #
+        if data.get("action") == "edit":
+
+            meds_ref = db.collection("medications") \
+                .where("user_email", "==", user_email.lower()) \
+                .stream()
+
+            target = None
+
+            for doc in meds_ref:
+                med = doc.to_dict()
+                if med["name"].lower() == data.get("name", "").lower():
+                    target = (doc.id, med)
+                    break
+
+            if not target:
+                return {"response": "❌ Medicine not found"}
+
+            doc_id, med = target
+
+            # 🧹 DELETE OLD CALENDAR EVENTS
+            for dose in med.get("schedule", []):
+                if "event_id" in dose:
+                    delete_event(dose["event_id"])
+
+            # 🆕 CREATE NEW SCHEDULE
+            times = data.get("times", [])
+
+            if not times:
+                return {"response": "⚠️ Provide new times for editing"}
+
+            new_schedule = []
+
+            for t in times:
+                event_id = create_event(
+                    summary=f"Take {data['name']}",
+                    description=data.get("dosage", ""),
+                    time_str=t
+                )
+
+                new_schedule.append({
+                    "time": t,
+                    "taken": False,
+                    "event_id": event_id
+                })
+
+            db.collection("medications").document(doc_id).update({
+                "name": data.get("name"),
+                "dosage": data.get("dosage", med.get("dosage")),
+                "schedule": new_schedule
+            })
+
+            return {"response": f"✏️ Updated {data['name']}"}
+
+        # ---------- DELETE MED ---------- #
+        if data.get("action") == "delete":
+
+            meds_ref = db.collection("medications") \
+                .where("user_email", "==", user_email.lower()) \
+                .stream()
+
+            for doc in meds_ref:
+                med = doc.to_dict()
+
+                if med["name"].lower() == data.get("name", "").lower():
+
+                    # 🧹 DELETE CALENDAR EVENTS
+                    for dose in med.get("schedule", []):
+                        if "event_id" in dose:
+                            delete_event(dose["event_id"])
+
+                    db.collection("medications").document(doc.id).delete()
+
+                    return {"response": f"🗑 Deleted {med['name']}"}
+
+            return {"response": "❌ Medicine not found"}
+
+        # ---------- NORMAL CHAT ---------- #
+        return {"response": data.get("response", "Done")}
+
+    except Exception as e:
+        print("❌ CHAT ERROR:", e)
+        return {"response": "Something went wrong"}

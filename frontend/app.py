@@ -10,6 +10,9 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.email = None
 
+if "pending_med" not in st.session_state:
+    st.session_state.pending_med = None
+
 # ---------- QUERY PARAM SESSION ---------- #
 query_params = st.query_params
 
@@ -70,7 +73,7 @@ if st.session_state.logged_in:
         df = pd.DataFrame(meds)
 
         if not df.empty:
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
 
             st.write("### 📊 Adherence Chart")
             chart_df = df.set_index("name")["adherence"]
@@ -178,7 +181,7 @@ if st.session_state.logged_in:
                 "Number of doses",
                 min_value=1,
                 max_value=5,
-                value=len(med.get("schedule", [])),
+                value=max(1, len(med.get("schedule", []))),
                 key=f"count_{med['id']}"
             )
 
@@ -311,24 +314,59 @@ if st.session_state.logged_in:
 
     if st.button("Send") and query:
 
+        # SAVE USER MESSAGE
         st.session_state.chat_history.append({
             "role": "user",
             "content": query
         })
 
-        res = requests.post(
-            f"{API_URL}/chat",
-            params={
-                "user_email": st.session_state.email,
-                "query": query
-            }
-        )
+        # ---------- IF WAITING FOR YES/NO ---------- #
+        if st.session_state.pending_med:
 
-        if res.status_code == 200:
-            reply = res.json()["response"]
+            if query.lower() in ["yes", "y"]:
+
+                data = st.session_state.pending_med
+
+                new_med = {
+                    "name": data.get("name", "Unknown"),
+                    "dosage": data.get("dosage", "Not specified"),
+                    "schedule": [{"time": "09:00", "taken": False}],
+                    "user_email": st.session_state.email
+                }
+
+                requests.post(f"{API_URL}/medications/add", json=new_med)
+
+                reply = f"✅ Added {new_med['name']} with default time (09:00)"
+
+                st.session_state.pending_med = None
+
+            else:
+                reply = "❌ Okay, please specify time like 'at 9 AM'"
+                st.session_state.pending_med = None
+
+        # ---------- NORMAL CHAT ---------- #
         else:
-            reply = "❌ Error talking to AI"
 
+            res = requests.post(
+                f"{API_URL}/chat",
+                params={
+                    "user_email": st.session_state.email,
+                    "query": query
+                }
+            )
+
+            if res.status_code == 200:
+                data = res.json()
+                reply = data["response"]
+
+                # 🔥 STORE PENDING MED FROM BACKEND
+                if "pending" in data:
+                    st.session_state.pending_med = data["pending"]
+
+            else:
+                reply = "❌ Error talking to AI"
+
+        # SAVE AI RESPONSE
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": reply
