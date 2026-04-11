@@ -23,7 +23,7 @@ from llm_chat import llm_chat_response
 
 from llm_chat import llm_chat_response
 from ai_parser import parse_chat_query
-
+from llm_parser import refine_medicines_llm
 
 import json
 def clean_medicines(meds):
@@ -528,7 +528,32 @@ async def ocr_upload(file: UploadFile = File(...)):
         if meds_raw.startswith("```"):
             meds_raw = meds_raw.replace("```json", "").replace("```", "").strip()
 
-        meds = clean_medicines(json.loads(meds_raw))
+        # ---------- FIRST LLM ----------
+        meds_raw = extract_medicines_llm(text)
+
+        meds_raw = meds_raw.strip()
+        if meds_raw.startswith("```"):
+            meds_raw = meds_raw.replace("```json", "").replace("```", "").strip()
+
+        parsed = json.loads(meds_raw)
+
+        print("\n===== LLM PASS 1 =====")
+        print(parsed)
+
+        # ---------- SECOND LLM (FIXING) ----------
+        refined_raw = refine_medicines_llm(parsed)
+
+        refined_raw = refined_raw.strip()
+        if refined_raw.startswith("```"):
+            refined_raw = refined_raw.replace("```json", "").replace("```", "").strip()
+
+        meds = json.loads(refined_raw)
+
+        print("\n===== LLM PASS 2 =====")
+        print(meds)
+
+        # ---------- FINAL CLEAN ----------
+        meds = clean_medicines(meds)
 
         # 🔥 SAFETY LIMIT
         if not isinstance(meds, list):

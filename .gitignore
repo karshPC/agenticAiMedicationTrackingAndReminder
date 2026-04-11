@@ -2,3 +2,4 @@
 credentials.json
 backend/serviceAccount.json
 backend/calendar_credentials.json
+__pycache__/

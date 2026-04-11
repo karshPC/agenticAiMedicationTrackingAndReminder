@@ -64,3 +64,49 @@ TEXT:
             last_error = e
 
     raise Exception(f"All OCR models failed: {last_error}")
+
+def refine_medicines_llm(raw_json):
+
+    prompt = f"""
+Fix and clean this medicine list.
+
+Remove garbage, fix spelling, keep only real medicines.
+
+Return STRICT JSON:
+
+[
+  {{
+    "name": "",
+    "dosage": ""
+  }}
+]
+
+DATA:
+{raw_json}
+"""
+
+    models_to_try = [
+        "models/gemini-3.1-flash-lite-preview",
+        "models/gemini-2.5-flash",
+        "models/gemini-2.5-flash-lite"
+    ]
+
+    for model in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt
+            )
+            print(f"🧠 REFINE MODEL: {model}")
+
+            result = response.text.strip()
+
+            if result.startswith("```"):
+                result = result.replace("```json", "").replace("```", "").strip()
+
+            return result
+
+        except Exception as e:
+            print("❌ REFINE FAILED:", e)
+
+    return raw_json
