@@ -48,6 +48,21 @@ if st.session_state.logged_in:
 
     st.success(f"Logged in as {st.session_state.email}")
 
+    # 🔥 LOAD CHAT FROM BACKEND
+    if "chat_loaded" not in st.session_state:
+
+        res = requests.get(f"{API_URL}/chat/history/{st.session_state.email}")
+
+        if res.status_code == 200:
+            history = res.json()
+
+            if "chat_history" not in st.session_state:
+                st.session_state.chat_history = {}
+
+            st.session_state.chat_history[st.session_state.email] = history
+
+        st.session_state.chat_loaded = True
+
     # ================= DASHBOARD ================= #
     st.write("## 📊 Dashboard")
 
@@ -301,10 +316,17 @@ if st.session_state.logged_in:
     # ================= AI CHAT ================= #
     st.write("## 🤖 AI Health Assistant")
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+    user = st.session_state.email
 
-    for msg in st.session_state.chat_history:
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = {}
+
+    if user not in st.session_state.chat_history:
+        st.session_state.chat_history[user] = []
+
+    chat_history = st.session_state.chat_history[user]
+
+    for msg in chat_history:
         if msg["role"] == "user":
             st.markdown(f"**🧑 You:** {msg['content']}")
         else:
@@ -315,10 +337,16 @@ if st.session_state.logged_in:
     if st.button("Send") and query:
 
         # SAVE USER MESSAGE
-        st.session_state.chat_history.append({
+        chat_history.append({
             "role": "user",
             "content": query
         })
+
+        requests.post(
+            f"{API_URL}/chat/save",
+            params={"user_email": st.session_state.email},
+            json={"role": "user", "content": query}
+        )
 
         # ---------- IF WAITING FOR YES/NO ---------- #
         if st.session_state.pending_med:
@@ -374,17 +402,22 @@ if st.session_state.logged_in:
                 reply = "❌ Error talking to AI"
 
         # SAVE AI RESPONSE
-        st.session_state.chat_history.append({
+        chat_history.append({
             "role": "assistant",
             "content": reply
         })
+
+        requests.post(
+            f"{API_URL}/chat/save",
+            params={"user_email": st.session_state.email},
+            json={"role": "assistant", "content": reply}
+        )
 
         st.rerun()
 
     # ================= LOGOUT ================= #
     if st.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.email = None
+        st.session_state.clear()
         st.query_params.clear()
         st.rerun()
 
@@ -403,6 +436,7 @@ else:
             })
 
             if res.status_code == 200:
+                st.session_state.chat_history = {}
                 st.session_state.logged_in = True
                 st.session_state.email = email.lower()
                 st.query_params["email"] = email.lower()

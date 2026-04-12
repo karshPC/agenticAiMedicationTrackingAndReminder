@@ -11,14 +11,21 @@ google-api-python-client
 google-auth
 google-auth-httplib2
 google-auth-oauthlib
+google-genai
 
 langgraph
 langchain
 openai
 
+rapidfuzz
+
+email-validator
+
 pytesseract
 opencv-python
 Pillow
+
+python-multipart
 
 pandas
 numpy

@@ -503,6 +503,27 @@ def get_analytics(email: str):
 
 # ---------------- OCR ---------------- #
 
+@app.post("/chat/save")
+def save_chat(user_email: str, message: dict):
+
+    db.collection("chat_history") \
+        .document(user_email.lower()) \
+        .set({
+            "messages": firestore.ArrayUnion([message])
+        }, merge=True)
+
+    return {"status": "saved"}
+
+@app.get("/chat/history/{user_email}")
+def get_chat_history(user_email: str):
+
+    doc = db.collection("chat_history").document(user_email.lower()).get()
+
+    if doc.exists:
+        return doc.to_dict().get("messages", [])
+
+    return []
+
 @app.post("/ocr/upload")
 async def ocr_upload(file: UploadFile = File(...)):
 
@@ -588,9 +609,27 @@ import json
 @app.post("/chat")
 def chat(user_email: str, query: str):
 
+    q = query.lower().strip()
+
+    # ---------- GREETING HANDLER ----------
+    if q in ["hi", "hello", "hey", "hii", "yo"]:
+        return {
+            "response": "👋 Hey! I’m your AI health assistant.\n\nYou can ask me:\n• 'Add dolo 650 at 9 am'\n• 'What is my adherence?'\n• 'Delete paracetamol'\n\nHow can I help you today?"
+        }
+
     docs = db.collection("medications").where("user_email", "==", user_email.lower()).stream()
 
     meds = []
+
+    # ---------- GET CHAT HISTORY ----------
+    chat_doc = db.collection("chat_history").document(user_email.lower()).get()
+
+    if chat_doc.exists:
+        history = chat_doc.to_dict().get("messages", [])
+    else:
+        history = []
+    
+
     for doc in docs:
         data = doc.to_dict()
         data["id"] = doc.id
@@ -614,7 +653,11 @@ def chat(user_email: str, query: str):
             }
 
         # ---------- STEP 1: TRY LLM ----------
-        raw = llm_chat_response(query, meds)
+        formatted_history = "\n".join([
+            f"{m['role']}: {m['content']}" for m in history[-10:]
+        ])
+
+        raw = llm_chat_response(query, meds, formatted_history)
 
         if not raw:
             raise Exception("Empty LLM response")
@@ -667,13 +710,15 @@ def chat(user_email: str, query: str):
                 }
 
                 db.collection("medications").document().set(new_med)
+                
+                db.collection("chat_history").document(user_email.lower()).set({
+                    "messages": firestore.ArrayUnion([
+                        {"role": "user", "content": query},
+                        {"role": "assistant", "content": f"Added {new_med['name']}"}
+                    ])
+                }, merge=True)
 
                 return {"response": f"✅ Added {new_med['name']} with reminders"}
-
-                db.collection("medications").document().set(new_med)
-
-                return {"response": f"✅ Added {new_med['name']}"}
-
 
             # ---------- DELETE ----------
             if action == "delete":
@@ -693,8 +738,21 @@ def chat(user_email: str, query: str):
 
                         db.collection("medications").document(doc.id).delete()
 
+                        db.collection("chat_history").document(user_email.lower()).set({
+                            "messages": firestore.ArrayUnion([
+                                {"role": "user", "content": query},
+                                {"role": "assistant", "content": f"Added {new_med['name']}"}
+                            ])
+                        }, merge=True)
+
                         return {"response": f"🗑 Deleted {med['name']}"}
 
+                db.collection("chat_history").document(user_email.lower()).set({
+                    "messages": firestore.ArrayUnion([
+                        {"role": "user", "content": query},
+                        {"role": "assistant", "content": f"Added {new_med['name']}"}
+                    ])
+                }, merge=True)
                 return {"response": "❌ Medicine not found"}
             
             # ---------- EDIT ----------
@@ -752,6 +810,19 @@ def chat(user_email: str, query: str):
                 })
 
                 return {"response": f"✏️ Updated {data['name']}"}
+            
+            # ---------- NORMAL RESPONSE (CHATGPT MODE) ----------
+            response_text = data.get("response", "⚠️ No response")
+
+            # SAVE CHAT HISTORY
+            db.collection("chat_history").document(user_email.lower()).set({
+                "messages": firestore.ArrayUnion([
+                    {"role": "user", "content": query},
+                    {"role": "assistant", "content": response_text}
+                ])
+            }, merge=True)
+
+            return {"response": response_text}
 
         except:
             print("❌ JSON FAILED:", raw)
