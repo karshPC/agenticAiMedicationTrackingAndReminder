@@ -652,6 +652,17 @@ def chat(user_email: str, query: str):
                 )
             }
 
+        # ---------- STEP 0.5: HANDLE "ONE MORE" CONTEXT ----------
+        last_med = None
+
+        for msg in reversed(history):
+            if msg["role"] == "assistant" and "Added" in msg["content"]:
+                last_med = msg["content"].replace("✅ Added", "").replace("with reminders", "").strip()
+                break
+
+        if "one more" in query.lower() and last_med:
+            query = f"add {last_med} at night"
+
         # ---------- STEP 1: TRY LLM ----------
         formatted_history = "\n".join([
             f"{m['role']}: {m['content']}" for m in history[-10:]
