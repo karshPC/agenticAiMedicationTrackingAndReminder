@@ -213,35 +213,86 @@ if st.session_state.logged_in:
 
         st.markdown("""
         <style>
-        .hero {
-            padding: 60px;
-            border-radius: 20px;
-            background: linear-gradient(135deg, #00D4FF, #090979);
-            color: white;
-            text-align: center;
-            margin-bottom: 30px;
+
+        .hero-container {
+        position: relative;
+        border-radius: 24px;
+        overflow: hidden;
+        height: 420px;
+        margin-bottom: 30px;
         }
-        .hero h1 {
-            font-size: 48px;
-            margin-bottom: 10px;
+
+        .hero-bg {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        filter: brightness(0.5);
         }
-        .hero p {
-            font-size: 20px;
-            opacity: 0.9;
+
+        .hero-overlay {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(120deg, rgba(0,212,255,0.3), rgba(0,0,0,0.7));
         }
+
+        .hero-content {
+        position: relative;
+        z-index: 2;
+        text-align: center;
+        color: white;
+        top: 50%;
+        transform: translateY(-50%);
+        }
+
+        .hero-title {
+        font-size: 48px;
+        font-weight: 700;
+        }
+
+        .hero-sub {
+        font-size: 20px;
+        opacity: 0.9;
+        margin-top: 10px;
+        }
+
+        .hero-btn {
+        margin-top: 25px;
+        }
+
         </style>
 
-        <div class="hero">
-            <h1>💊 MedGuard Omni 💊</h1>
-            <p>AI-powered medication tracking, reminders & adherence system</p>
+        <div class="hero-container">
+
+        <img class="hero-bg" src="https://images.unsplash.com/photo-1772683709326-134a6a4635d5?q=80&w=1470&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"/>
+
+        <div class="hero-overlay"></div>
+
+        <div class="hero-content">
+            <div class="hero-title">MedGuard Omni</div>
+            <div class="hero-sub">
+                AI-powered medication tracking, reminders & adherence system
+            </div>
+        </div>
+
         </div>
         """, unsafe_allow_html=True)
 
         st.markdown("<div style='text-align:center;'>", unsafe_allow_html=True)
 
-        if st.button("🚀 Go to Dashboard"):
-            st.session_state.selected_page = "Dashboard"
-            st.rerun()
+        col1, col2, col3 = st.columns([1,2,1])
+
+        with col2:
+            if st.button("🚀 Go to Dashboard", use_container_width=True):
+                st.session_state.selected_page = "Dashboard"
+                st.rerun()
+        
+        #======================CAN BE UNCOMMENTED LATER, IF FEATURE ADDED=======================#
+
+        # with col2:
+        #     if st.button("➕ Add Medicines", use_container_width=True):
+        #         st.session_state.selected_page = "Add Meds"
+        #         st.rerun()
 
         st.markdown("</div>", unsafe_allow_html=True)
 
