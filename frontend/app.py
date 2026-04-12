@@ -356,8 +356,15 @@ if st.session_state.logged_in:
             )
 
             if res.status_code == 200:
-                data = res.json()
-                reply = data["response"]
+                try:
+                    data = res.json()
+                except:
+                    data = {"response": "⚠️ Invalid server response"}
+
+                if not data:
+                    data = {"response": "⚠️ Empty response from backend"}
+
+                reply = data.get("response", "⚠️ No response field")
 
                 # 🔥 STORE PENDING MED FROM BACKEND
                 if "pending" in data:

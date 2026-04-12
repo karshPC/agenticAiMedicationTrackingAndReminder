@@ -597,24 +597,10 @@ def chat(user_email: str, query: str):
         meds.append(data)
 
     try:
-        # ---------- STEP 1: TRY LLM ----------
-        raw = llm_chat_response(query, meds)
+        # ---------- STEP 0: SIMPLE QUERY → USE AGENT ----------
+        simple_keywords = ["adherence", "taken", "pending", "missed", "progress"]
 
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.replace("```json", "").replace("```", "").strip()
-
-        data = json.loads(raw)
-
-    except Exception as e:
-        print("❌ LLM FAILED → FALLBACK:", e)
-
-        # ---------- STEP 2: LOCAL PARSER ----------
-        data = parse_chat_query(query)
-
-        # ---------- STEP 3: IF STILL UNKNOWN → AGENT ----------
-        if data.get("action") == "unknown":
-
+        if any(word in query.lower() for word in simple_keywords):
             agent_response = agent.invoke({
                 "query": query,
                 "medications": meds
@@ -623,90 +609,167 @@ def chat(user_email: str, query: str):
             return {
                 "response": agent_response.get(
                     "response",
-                    "🤖 Could not understand your request"
+                    "🤖 Could not understand"
                 )
             }
 
-        # ---------- ADD MEDICINE ---------- #
-        if data.get("action") == "add":
+        # ---------- STEP 1: TRY LLM ----------
+        raw = llm_chat_response(query, meds)
 
-            times = data.get("times", [])
+        if not raw:
+            raise Exception("Empty LLM response")
 
-            # ❗ IF NO TIMES → ASK USER
-            if not times:
-                return {
-                    "response": f"⚠️ You didn’t specify time for {data.get('name','medicine')}.\nSet default (09:00)? Reply YES or NO.",
-                    "pending": data   # 👈 VERY IMPORTANT
+        raw = raw.strip()
+
+        if raw.startswith("```"):
+            raw = raw.replace("```json", "").replace("```", "").strip()
+
+        try:
+            data = json.loads(raw)
+            # ---------- HANDLE ACTIONS FROM LLM ---------- #
+
+            action = data.get("action")
+
+            # ---------- ADD ----------
+            if action == "add":
+
+                times = data.get("times", [])
+
+                if not times:
+                    return {
+                        "response": f"⚠️ You didn’t specify time for {data.get('name','medicine')}.\nSet default (09:00)?",
+                        "pending": data
+                    }
+
+                schedule = []
+
+                for t in times:
+                    try:
+                        event_id = create_event(
+                            summary=f"Take {data.get('name')}",
+                            description=f"Dosage: {data.get('dosage')}",
+                            time_str=t
+                        )
+                    except:
+                        event_id = None
+
+                    schedule.append({
+                        "time": t,
+                        "taken": False,
+                        "event_id": event_id
+                    })
+
+                new_med = {
+                    "name": data.get("name", "Unknown"),
+                    "dosage": data.get("dosage", "Not specified"),
+                    "user_email": user_email.lower(),
+                    "schedule": schedule
                 }
 
-            # ✅ NORMAL ADD
-            new_med = {
-                "name": data.get("name", "Unknown"),
-                "dosage": data.get("dosage", "Not specified"),
-                "user_email": user_email.lower(),
-                "schedule": [{"time": t, "taken": False} for t in times]
-            }
+                db.collection("medications").document().set(new_med)
 
-            db.collection("medications").document().set(new_med)
+                return {"response": f"✅ Added {new_med['name']} with reminders"}
 
-            return {"response": f"✅ Added {new_med['name']}"}
+                db.collection("medications").document().set(new_med)
 
-        # ---------- EDIT MED ---------- #
-        if data.get("action") == "edit":
+                return {"response": f"✅ Added {new_med['name']}"}
 
-            meds_ref = db.collection("medications") \
-                .where("user_email", "==", user_email.lower()) \
-                .stream()
 
-            target = None
+            # ---------- DELETE ----------
+            if action == "delete":
 
-            for doc in meds_ref:
-                med = doc.to_dict()
-                if med["name"].lower() == data.get("name", "").lower():
-                    target = (doc.id, med)
-                    break
+                meds_ref = db.collection("medications") \
+                    .where("user_email", "==", user_email.lower()) \
+                    .stream()
 
-            if not target:
+                for doc in meds_ref:
+                    med = doc.to_dict()
+
+                    if med["name"].lower() == data.get("name", "").lower():
+
+                        for dose in med.get("schedule", []):
+                            if "event_id" in dose:
+                                delete_event(dose["event_id"])
+
+                        db.collection("medications").document(doc.id).delete()
+
+                        return {"response": f"🗑 Deleted {med['name']}"}
+
                 return {"response": "❌ Medicine not found"}
+            
+            # ---------- EDIT ----------
+            if action == "edit":
 
-            doc_id, med = target
+                meds_ref = db.collection("medications") \
+                    .where("user_email", "==", user_email.lower()) \
+                    .stream()
 
-            # 🧹 DELETE OLD CALENDAR EVENTS
-            for dose in med.get("schedule", []):
-                if "event_id" in dose:
-                    delete_event(dose["event_id"])
+                target = None
 
-            # 🆕 CREATE NEW SCHEDULE
-            times = data.get("times", [])
+                for doc in meds_ref:
+                    med = doc.to_dict()
+                    if med["name"].lower() == data.get("name", "").lower():
+                        target = (doc.id, med)
+                        break
 
-            if not times:
-                return {"response": "⚠️ Provide new times for editing"}
+                if not target:
+                    return {"response": "❌ Medicine not found"}
 
-            new_schedule = []
+                doc_id, med = target
 
-            for t in times:
-                event_id = create_event(
-                    summary=f"Take {data['name']}",
-                    description=data.get("dosage", ""),
-                    time_str=t
-                )
+                # DELETE OLD EVENTS
+                for dose in med.get("schedule", []):
+                    if "event_id" in dose:
+                        delete_event(dose["event_id"])
 
-                new_schedule.append({
-                    "time": t,
-                    "taken": False,
-                    "event_id": event_id
+                times = data.get("times", [])
+
+                if not times:
+                    return {"response": "⚠️ Provide new times"}
+
+                new_schedule = []
+
+                for t in times:
+                    try:
+                        event_id = create_event(
+                            summary=f"Take {data['name']}",
+                            description=data.get("dosage", ""),
+                            time_str=t
+                        )
+                    except:
+                        event_id = None
+
+                    new_schedule.append({
+                        "time": t,
+                        "taken": False,
+                        "event_id": event_id
+                    })
+
+                db.collection("medications").document(doc_id).update({
+                    "name": data.get("name"),
+                    "dosage": data.get("dosage", med.get("dosage")),
+                    "schedule": new_schedule
                 })
 
-            db.collection("medications").document(doc_id).update({
-                "name": data.get("name"),
-                "dosage": data.get("dosage", med.get("dosage")),
-                "schedule": new_schedule
-            })
+                return {"response": f"✏️ Updated {data['name']}"}
 
-            return {"response": f"✏️ Updated {data['name']}"}
+        except:
+            print("❌ JSON FAILED:", raw)
+            raise Exception("Invalid JSON from LLM")
+            
+    except Exception as e:
+        print("❌ LLM FAILED:", e)
 
-        # ---------- DELETE MED ---------- #
-        if data.get("action") == "delete":
+        # ---------- STEP 1: TRY SIMPLE ACTION DETECTION ----------
+        q = query.lower()
+
+        # ---------- ADD ----------
+        if "add" in q:
+            return {"response": "⚠️ AI failed to process add. Try: 'add dolo 650 at 9 am'"}
+
+        # ---------- DELETE ----------
+        if "delete" in q or "remove" in q:
+            name = q.replace("delete", "").replace("remove", "").strip()
 
             meds_ref = db.collection("medications") \
                 .where("user_email", "==", user_email.lower()) \
@@ -715,9 +778,8 @@ def chat(user_email: str, query: str):
             for doc in meds_ref:
                 med = doc.to_dict()
 
-                if med["name"].lower() == data.get("name", "").lower():
+                if name in med["name"].lower():
 
-                    # 🧹 DELETE CALENDAR EVENTS
                     for dose in med.get("schedule", []):
                         if "event_id" in dose:
                             delete_event(dose["event_id"])
@@ -728,8 +790,18 @@ def chat(user_email: str, query: str):
 
             return {"response": "❌ Medicine not found"}
 
-        # ---------- NORMAL CHAT ---------- #
-        return {"response": data.get("response", "Done")}
+        # ---------- OTHERWISE → AGENT ----------
+        agent_response = agent.invoke({
+            "query": query,
+            "medications": meds
+        })
+
+        return {
+            "response": agent_response.get(
+                "response",
+                "🤖 Could not understand your request"
+            )
+        }
 
     except Exception as e:
         print("❌ CHAT ERROR:", e)

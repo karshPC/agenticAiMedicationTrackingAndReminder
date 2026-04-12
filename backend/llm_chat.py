@@ -26,9 +26,9 @@ Respond ONLY in JSON format like:
 """
 
     models_to_try = [
-        "models/gemini-3.1-flash-lite-preview",  # ✅ correct one (500/day)
         "models/gemini-2.5-flash",               # ✅ 20/day
         "models/gemini-2.5-flash-lite"           # ✅ 20/day
+        "models/gemini-3.1-flash-lite-preview",  # ✅ correct one (500/day)
     ]
 
     last_error = None
@@ -43,7 +43,10 @@ Respond ONLY in JSON format like:
             print(f"✅ USED MODEL: {model}")
             print(f"🔁 TRYING MODEL: {model}")
 
-            return response.text
+            if not response.text:
+                raise Exception("Empty LLM response")
+
+            return response.text.strip()
 
         except Exception as e:
             print(f"❌ MODEL FAILED: {model} → {e}")
