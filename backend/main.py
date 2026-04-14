@@ -888,3 +888,5 @@ def chat(user_email: str, query: str):
     except Exception as e:
         print("❌ CHAT ERROR:", e)
         return {"response": "Something went wrong"}
+    
+#-------End of Program--------
