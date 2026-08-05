@@ -1,4 +1,4 @@
-# agenticAiMedicationTrackingAndReminder
+Agentic AI Medication Tracking and Reminder
 FOR MY DESIGN PROJECT WORK.
 
 **MedGuard Omni** is an Agentic AI-powered healthcare system designed for intelligent medication tracking and scheduling. It leverages a robust FastAPI backend, a responsive Streamlit UI, and Firebase for secure, real-time data synchronization. 
